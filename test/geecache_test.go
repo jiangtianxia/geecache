@@ -9,8 +9,8 @@ import (
 )
 
 func TestGetter(t *testing.T) {
-	var f geecache.Callback
-	f = geecache.CallbackFunc(func(key string) ([]byte, error) {
+	var f geecache.Getter
+	f = geecache.GetterFunc(func(key string) ([]byte, error) {
 		return []byte(key), nil
 	})
 
@@ -30,7 +30,7 @@ var db = map[string]string{
 
 func TestGroupGet(t *testing.T) {
 	loadCounts := make(map[string]int, len(db))
-	gee := geecache.NewGroup("scores", 2<<10, geecache.CallbackFunc(
+	gee := geecache.NewGroup("scores", 2<<10, geecache.GetterFunc(
 		func(key string) ([]byte, error) {
 			log.Println("[SlowDB] search key", key)
 			if v, ok := db[key]; ok {

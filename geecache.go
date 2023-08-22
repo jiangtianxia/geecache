@@ -8,20 +8,20 @@ import (
 )
 
 // 回调接口
-type Callback interface {
+type Getter interface {
 	Get(key string) ([]byte, error) // 回调函数
 }
 
-type CallbackFunc func(key string) ([]byte, error)
+type GetterFunc func(key string) ([]byte, error)
 
-func (f CallbackFunc) Get(key string) ([]byte, error) {
+func (f GetterFunc) Get(key string) ([]byte, error) {
 	return f(key)
 }
 
 // 缓存的命名空间
 type CacheGroup struct {
 	name      string              // 唯一名称
-	callback  Callback            // 缓存未命中时获取源数据的回调(callback)
+	getter    Getter              // 数据源获取数据, 缓存未命中时获取源数据的回调(callback)
 	mainCache cache               // 并发缓存
 	server    NodeServer          // 用于获取远程节点请求客户端
 	loader    *singleflight.Group // 解决缓存击穿和穿透问题
@@ -32,16 +32,16 @@ var (
 	groups = make(map[string]*CacheGroup)
 )
 
-func NewGroup(name string, capacity int64, callback Callback) *CacheGroup {
-	if callback == nil {
-		panic("nil callback func")
+func NewGroup(name string, capacity int64, getter Getter) *CacheGroup {
+	if getter == nil {
+		panic("nil getter func")
 	}
 	mu.Lock()
 	defer mu.Unlock()
 
 	g := &CacheGroup{
 		name:      name,
-		callback:  callback,
+		getter:    getter,
 		mainCache: cache{capacity: capacity},
 		loader:    &singleflight.Group{},
 	}
@@ -63,7 +63,7 @@ func (g *CacheGroup) populateCache(key string, value ByteView) {
 }
 
 func (g *CacheGroup) getLocally(key string) (ByteView, error) {
-	bytes, err := g.callback.Get(key)
+	bytes, err := g.getter.Get(key)
 	if err != nil {
 		return ByteView{}, err
 	}

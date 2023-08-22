@@ -23,7 +23,7 @@ var db = map[string]string{
 }
 
 func createCacheGroup() *geecache.CacheGroup {
-	return geecache.NewGroup("scores", 2<<10, geecache.CallbackFunc(
+	return geecache.NewGroup("scores", 2<<10, geecache.GetterFunc(
 		func(key string) ([]byte, error) {
 			log.Println("[SlowDB] search key", key)
 			if v, ok := db[key]; ok {
