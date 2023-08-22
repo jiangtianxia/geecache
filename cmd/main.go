@@ -22,8 +22,8 @@ var db = map[string]string{
 	"Sam":  "567",
 }
 
-func createGroup() *geecache.Group {
-	return geecache.NewGroup("scores", 2<<10, geecache.GetterFunc(
+func createCacheGroup() *geecache.CacheGroup {
+	return geecache.NewGroup("scores", 2<<10, geecache.CallbackFunc(
 		func(key string) ([]byte, error) {
 			log.Println("[SlowDB] search key", key)
 			if v, ok := db[key]; ok {
@@ -33,19 +33,19 @@ func createGroup() *geecache.Group {
 		}))
 }
 
-func startCacheServer(addr string, addrs []string, gee *geecache.Group) {
-	peers := geecache.NewHTTPPool(addr)
-	peers.Set(addrs...)
-	gee.RegisterPeers(peers)
+func startCacheServer(addr string, addrs []string, gee *geecache.CacheGroup) {
+	server := geecache.NewHTTPPool(addr)
+	server.Set(addrs...)
+	gee.RegisterServer(server)
 	log.Println("geecache is running at", addr)
-	log.Fatal(http.ListenAndServe(addr[7:], peers))
+	log.Fatal(http.ListenAndServe(addr[7:], server))
 }
 
-func startAPIServer(apiAddr string, gee *geecache.Group) {
+func startAPIServer(apiAddr string, gee *geecache.CacheGroup) {
 	http.Handle("/api", http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			key := r.URL.Query().Get("key")
-			view, err := gee.Get(key)
+			view, err := gee.GetCacheValue(key)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -78,7 +78,7 @@ func main() {
 		addrs = append(addrs, v)
 	}
 
-	gee := createGroup()
+	gee := createCacheGroup()
 	if api {
 		go startAPIServer(apiAddr, gee)
 	}

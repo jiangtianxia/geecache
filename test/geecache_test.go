@@ -9,8 +9,8 @@ import (
 )
 
 func TestGetter(t *testing.T) {
-	var f geecache.Getter
-	f = geecache.GetterFunc(func(key string) ([]byte, error) {
+	var f geecache.Callback
+	f = geecache.CallbackFunc(func(key string) ([]byte, error) {
 		return []byte(key), nil
 	})
 
@@ -30,7 +30,7 @@ var db = map[string]string{
 
 func TestGroupGet(t *testing.T) {
 	loadCounts := make(map[string]int, len(db))
-	gee := geecache.NewGroup("scores", 2<<10, geecache.GetterFunc(
+	gee := geecache.NewGroup("scores", 2<<10, geecache.CallbackFunc(
 		func(key string) ([]byte, error) {
 			log.Println("[SlowDB] search key", key)
 			if v, ok := db[key]; ok {
@@ -44,15 +44,15 @@ func TestGroupGet(t *testing.T) {
 		}))
 
 	for k, v := range db {
-		if view, err := gee.Get(k); err != nil || view.String() != v {
+		if view, err := gee.GetCacheValue(k); err != nil || view.String() != v {
 			t.Fatal("failed to get value of Tom")
 		} // load from callback function
-		if _, err := gee.Get(k); err != nil || loadCounts[k] > 1 {
+		if _, err := gee.GetCacheValue(k); err != nil || loadCounts[k] > 1 {
 			t.Fatalf("cache %s miss", k)
 		} // cache hit
 	}
 
-	if view, err := gee.Get("unknown"); err == nil {
+	if view, err := gee.GetCacheValue("unknown"); err == nil {
 		t.Fatalf("the value of unknow should be empty, but %s got", view)
 	} else {
 		t.Log(err)

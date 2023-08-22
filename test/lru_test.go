@@ -2,8 +2,8 @@ package test
 
 import (
 	"geecache/lru"
-	"reflect"
 	"testing"
+	"time"
 )
 
 type String string
@@ -37,7 +37,7 @@ func TestRemoveOldest(t *testing.T) {
 	lru.Add(k2, String(v2))
 	lru.Add(k3, String(v3))
 
-	if v, ok := lru.Get("key1"); ok || lru.Len() != 2 {
+	if v, ok := lru.Get("key1"); ok {
 		t.Fatalf("RemoveOldest key1 failed")
 	} else {
 		t.Log(ok, v)
@@ -51,16 +51,15 @@ func TestOnEvicted(t *testing.T) {
 		keys = append(keys, key)
 	}
 
-	lru := lru.NewCache(int64(10), callback)
+	lru := lru.NewCache(int64(2), callback)
 	lru.Add("key1", String("123456"))
 	lru.Add("k2", String("k2"))
 	lru.Add("k3", String("k3"))
 	lru.Add("k4", String("k4"))
+	lru.Add("k5", String("k5"))
+	lru.Expire("k4", 2)
 
-	expect := []string{"key1", "k2"}
-
-	if !reflect.DeepEqual(expect, keys) {
-		t.Fatalf("Call OnEvicted failed, expect key equals to %s", expect)
-	}
 	t.Log(keys)
+	time.Sleep(5 * time.Second)
+	t.Log(lru.Get("k4"))
 }

@@ -8,48 +8,48 @@ import (
 )
 
 // 回调接口
-type Getter interface {
+type Callback interface {
 	Get(key string) ([]byte, error) // 回调函数
 }
 
-type GetterFunc func(key string) ([]byte, error)
+type CallbackFunc func(key string) ([]byte, error)
 
-func (f GetterFunc) Get(key string) ([]byte, error) {
+func (f CallbackFunc) Get(key string) ([]byte, error) {
 	return f(key)
 }
 
 // 缓存的命名空间
-type Group struct {
-	name      string // 唯一名称
-	getter    Getter // 缓存未命中时获取源数据的回调(callback)
-	mainCache cache  // 并发缓存
-	peers     PeerPicker
+type CacheGroup struct {
+	name      string              // 唯一名称
+	callback  Callback            // 缓存未命中时获取源数据的回调(callback)
+	mainCache cache               // 并发缓存
+	server    NodeServer          // 用于获取远程节点请求客户端
 	loader    *singleflight.Group // 解决缓存击穿和穿透问题
 }
 
 var (
 	mu     sync.RWMutex
-	groups = make(map[string]*Group)
+	groups = make(map[string]*CacheGroup)
 )
 
-func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
-	if getter == nil {
-		panic("nil Getter")
+func NewGroup(name string, capacity int64, callback Callback) *CacheGroup {
+	if callback == nil {
+		panic("nil callback func")
 	}
 	mu.Lock()
 	defer mu.Unlock()
 
-	g := &Group{
+	g := &CacheGroup{
 		name:      name,
-		getter:    getter,
-		mainCache: cache{cacheBytes: cacheBytes},
+		callback:  callback,
+		mainCache: cache{capacity: capacity},
 		loader:    &singleflight.Group{},
 	}
 	groups[name] = g
 	return g
 }
 
-func GetGroup(name string) *Group {
+func GetCacheGroup(name string) *CacheGroup {
 	mu.RLock()
 	g := groups[name]
 	mu.RUnlock()
@@ -57,12 +57,13 @@ func GetGroup(name string) *Group {
 	return g
 }
 
-func (g *Group) populateCache(key string, value ByteView) {
+func (g *CacheGroup) populateCache(key string, value ByteView) {
 	g.mainCache.add(key, value)
+	g.mainCache.expire(key, 60*60*24*7)
 }
 
-func (g *Group) getLocally(key string) (ByteView, error) {
-	bytes, err := g.getter.Get(key)
+func (g *CacheGroup) getLocally(key string) (ByteView, error) {
+	bytes, err := g.callback.Get(key)
 	if err != nil {
 		return ByteView{}, err
 	}
@@ -72,29 +73,29 @@ func (g *Group) getLocally(key string) (ByteView, error) {
 	return value, nil
 }
 
-func (g *Group) RegisterPeers(peers PeerPicker) {
-	if g.peers != nil {
-		panic("RegisterPeerPicker called more than once")
+func (g *CacheGroup) RegisterServer(server NodeServer) {
+	if g.server != nil {
+		panic("RegisterServer called more than once")
 	}
-	g.peers = peers
+	g.server = server
 }
 
-func (g *Group) getFormPeer(peer PeerGetter, key string) (ByteView, error) {
-	bytes, err := peer.Get(g.name, key)
+func (g *CacheGroup) getValueFormClient(client NodeClient, key string) (ByteView, error) {
+	bytes, err := client.GetCacheValue(g.name, key)
 	if err != nil {
 		return ByteView{}, err
 	}
 	return ByteView{b: bytes}, nil
 }
 
-func (g *Group) load(key string) (value ByteView, err error) {
+func (g *CacheGroup) load(key string) (value ByteView, err error) {
 	view, err := g.loader.Do(key, func() (interface{}, error) {
-		if g.peers != nil {
-			if peer, ok := g.peers.PickPeer(key); ok {
-				if value, err = g.getFormPeer(peer, key); err == nil {
+		if g.server != nil {
+			if client, ok := g.server.PickNodeClient(key); ok {
+				if value, err = g.getValueFormClient(client, key); err == nil {
 					return value, nil
 				}
-				log.Println("[GeeCache] Failed to get from peer", err)
+				log.Println("[GeeCache] Failed to get value from client", err)
 			}
 		}
 
@@ -107,7 +108,7 @@ func (g *Group) load(key string) (value ByteView, err error) {
 	return
 }
 
-func (g *Group) Get(key string) (ByteView, error) {
+func (g *CacheGroup) GetCacheValue(key string) (ByteView, error) {
 	if key == "" {
 		return ByteView{}, fmt.Errorf("key is required")
 	}

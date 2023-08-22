@@ -1,18 +1,21 @@
 package lru
 
-import "container/list"
+import (
+	"container/list"
+	"math/rand"
+	"time"
+)
 
-type Cache struct {
-	maxBytes int64 // 最大内存
-	nbytes   int64 // 已使用内存
-	l1       *list.List
-	cache    map[string]*list.Element
-
-	OnEvivted func(key string, value Value) // 某条记录被移除时的回调函数, 可以为nil
+type LRUCache struct {
+	capacity   int64                         // 最大缓存数量
+	length     int64                         // 当前缓存数量
+	list       *list.List                    // 数据链表
+	cache      map[string]*list.Element      // 缓存map
+	expireDict map[string]int64              // 过期字典
+	OnEvivted  func(key string, value Value) // 某条记录被移除时的回调函数, 可以为nil
 }
 
-// 双向链表节点的数据类型
-// 在链表中仍保存每个值对应的key的好处在于, 淘汰队首节点时, 需要用key从字段中删除对应的映射
+// 节点
 type entry struct {
 	key   string
 	value Value
@@ -20,25 +23,33 @@ type entry struct {
 
 // 任意类型
 type Value interface {
-	Len() int // 返回值所占用的内存大小
 }
 
-func NewCache(maxBytes int64, onEvicted func(string, Value)) *Cache {
-	return &Cache{
-		maxBytes:  maxBytes,
-		nbytes:    0,
-		l1:        list.New(),
-		cache:     make(map[string]*list.Element),
-		OnEvivted: onEvicted,
+func NewCache(capacity int64, onEvicted func(string, Value)) *LRUCache {
+	lru := &LRUCache{
+		capacity:   capacity,
+		length:     0,
+		list:       list.New(),
+		cache:      make(map[string]*list.Element),
+		expireDict: make(map[string]int64),
+		OnEvivted:  onEvicted,
 	}
+
+	return lru
 }
 
 // 查找功能
-func (c *Cache) Get(key string) (Value, bool) {
+func (c *LRUCache) Get(key string) (Value, bool) {
 	// 1、从字典中找到对应的双向链表的结点
-	// 2、将该结点移动到队尾
+	// 2、判断该结点是否已经过期, 过期则删除
+	// 3、不过期, 将该结点移动到队首
 	if ele, ok := c.cache[key]; ok {
-		c.l1.MoveToFront(ele)
+		if c.CheckKey(key) {
+			c.RemoveNode(ele)
+			return nil, false
+		}
+
+		c.list.MoveToFront(ele)
 		kv := ele.Value.(*entry)
 		return kv.value, true
 	}
@@ -46,13 +57,11 @@ func (c *Cache) Get(key string) (Value, bool) {
 }
 
 // 删除功能
-func (c *Cache) RemoveOldest() {
-	ele := c.l1.Back()
+func (c *LRUCache) RemoveOldest() {
+	ele := c.list.Back()
 	if ele != nil {
-		c.l1.Remove(ele)
+		c.RemoveNode(ele)
 		kv := ele.Value.(*entry)
-		delete(c.cache, kv.key)
-		c.nbytes -= (int64(len(kv.key)) + int64(kv.value.Len()))
 		if c.OnEvivted != nil {
 			c.OnEvivted(kv.key, kv.value)
 		}
@@ -60,26 +69,74 @@ func (c *Cache) RemoveOldest() {
 }
 
 // 新增/修改功能
-func (c *Cache) Add(key string, value Value) {
+func (c *LRUCache) Add(key string, value Value) {
 	if ele, ok := c.cache[key]; ok {
-		// 如果键存在, 则更新对应节点的值, 并将该节点移动到队尾
-		c.l1.MoveToFront(ele)
+		// 如果键存在, 则先判断是否过期, 更新对应节点的值, 并将该节点移动到队尾
+		if c.CheckKey(key) {
+			c.RemoveNode(ele)
+			ele := c.list.PushFront(&entry{key, value})
+			c.cache[key] = ele
+			c.length++
+			return
+		}
+		c.list.MoveToFront(ele)
 		kv := ele.Value.(*entry)
-		c.nbytes += int64(value.Len()) - int64(kv.value.Len())
 		kv.value = value
-	} else {
-		// 不存在则新增
-		ele := c.l1.PushFront(&entry{key, value})
-		c.cache[key] = ele
-		c.nbytes += int64(len(key)) + int64(value.Len())
+		return
 	}
+	// 不存在则新增
+	ele := c.list.PushFront(&entry{key, value})
+	c.cache[key] = ele
+	c.length++
 
-	// 如果内存超过最大值, 则移除最少访问的节点
-	for c.maxBytes != 0 && c.maxBytes < c.nbytes {
+	// 如果缓存数量超过限制, 则移除最少访问的节点
+	for c.capacity != 0 && c.capacity < c.length {
 		c.RemoveOldest()
 	}
 }
 
-func (c *Cache) Len() int {
-	return c.l1.Len()
+// 设置过期时间
+func (c *LRUCache) Expire(key string, second int64) {
+	c.expireDict[key] = time.Now().Add(time.Duration(second) * time.Second).Unix()
+}
+
+// 检测key是否已经过期
+func (c *LRUCache) CheckKey(key string) bool {
+	if t, ok := c.expireDict[key]; ok && t < time.Now().Unix() {
+		return true
+	}
+	return false
+}
+
+// 定期清理key
+func (c *LRUCache) CleanupExpiredKeys() {
+	checkKeysIndex := make(map[int64]struct{}, 5)
+	rand.Seed(time.Now().UnixNano())
+
+	for i := 0; i < 5; i++ {
+		keyIdx := rand.Int63n(c.length)
+		if _, ok := checkKeysIndex[keyIdx]; ok {
+			i--
+		} else {
+			checkKeysIndex[keyIdx] = struct{}{}
+		}
+	}
+
+	now := time.Now().Unix()
+	var i int64
+	for key, expireTime := range c.expireDict {
+		if _, ok := checkKeysIndex[i]; ok && expireTime <= now {
+			c.RemoveNode(c.cache[key])
+		}
+		i++
+	}
+}
+
+// 删除结点
+func (c *LRUCache) RemoveNode(node *list.Element) {
+	c.list.Remove(node)
+	c.length--
+	kv := node.Value.(*entry)
+	delete(c.cache, kv.key)
+	delete(c.expireDict, kv.key)
 }
